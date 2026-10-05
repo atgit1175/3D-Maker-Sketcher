@@ -1,0 +1,291 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Sphere Sketchpad</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&display=swap">
+<style>
+/* Layout: one-screen tool. Slim wrapping toolbar on top, the sphere fills everything below. */
+:root{
+  --bg:#e6ebf0; --panel:#f6f8fa; --fg:#1b2530; --muted:#5d6b79; --line:#c6d0da;
+  --accent:#1f6feb; --on-accent:#ffffff;
+  --ball-hi:#ffffff; --ball-lo:#cfd8e1; --rim:rgba(30,45,65,.38); --grid:rgba(40,60,85,.16); --shadow:rgba(30,45,65,.22);
+  --ui:"Outfit",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#12171d; --panel:#1b222b; --fg:#e8edf2; --muted:#93a1b0; --line:#313c49;
+  --accent:#5aa2ff; --on-accent:#0b1118;
+  --ball-hi:#f4f6f8; --ball-lo:#9aa7b5; --rim:rgba(5,10,18,.55); --grid:rgba(20,35,55,.2); --shadow:rgba(0,0,0,.5);
+  color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#12171d; --panel:#1b222b; --fg:#e8edf2; --muted:#93a1b0; --line:#313c49;
+  --accent:#5aa2ff; --on-accent:#0b1118;
+  --ball-hi:#f4f6f8; --ball-lo:#9aa7b5; --rim:rgba(5,10,18,.55); --grid:rgba(20,35,55,.2); --shadow:rgba(0,0,0,.5);
+  color-scheme:dark }
+
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--ui);font-size:14px;display:flex;flex-direction:column;overflow:hidden}
+.bar{background:var(--panel);border-bottom:1px solid var(--line);padding-block:8px;padding-inline:16px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.01em}
+.group{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+button{font:inherit;color:var(--fg);background:transparent;border:0;padding:6px 11px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);font-weight:500}
+.btn{border:1px solid var(--line);border-radius:8px}
+.btn:hover,.seg button:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.45;cursor:default}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.sw{width:24px;height:24px;padding:0;border-radius:50%;border:2px solid var(--line)}
+.sw[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:2px}
+input[type=color]{width:28px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none}
+input[type=range]{width:96px;accent-color:var(--accent)}
+label{display:flex;align-items:center;gap:5px;color:var(--muted);white-space:nowrap}
+input[type=checkbox]{accent-color:var(--accent)}
+.stage{flex:1;min-height:0;position:relative}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
+.hint{position:absolute;left:16px;right:16px;bottom:10px;margin:0;text-align:center;color:var(--muted);font-size:12.5px;pointer-events:none}
+</style>
+
+<div class="bar">
+  <h1>Sphere Sketchpad</h1>
+  <div class="seg" role="group" aria-label="Tool">
+    <button id="tool-draw" data-tool="draw" aria-pressed="true">Draw</button>
+    <button id="tool-erase" data-tool="erase" aria-pressed="false">Erase</button>
+    <button id="tool-rotate" data-tool="rotate" aria-pressed="false">Rotate</button>
+  </div>
+  <div class="group" id="swatches" aria-label="Ink color">
+    <input type="color" id="custom-color" value="#1f6feb" aria-label="Custom color">
+  </div>
+  <label for="size">Size <input type="range" id="size" min="1" max="30" value="5"></label>
+  <div class="group">
+    <button class="btn" id="undo">Undo</button>
+    <button class="btn" id="clear">Clear</button>
+  </div>
+  <div class="group">
+    <label for="opt-grid"><input type="checkbox" id="opt-grid" checked> Grid</label>
+    <label for="opt-xray"><input type="checkbox" id="opt-xray"> See-through</label>
+    <label for="opt-spin"><input type="checkbox" id="opt-spin"> Spin</label>
+  </div>
+</div>
+<div class="stage">
+  <canvas id="c" aria-label="Sphere you can draw on"></canvas>
+  <p class="hint" id="hint">Drag on the sphere to draw. Drag outside it, right-drag, or hold Shift to turn it. Scroll or pinch to zoom.</p>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const KEY = 'sphere-sketch-v1';
+const COLORS = ['#1b2530','#e5484d','#1f6feb','#2f9e44','#f5a524','#ffffff'];
+
+let strokes = [], history = [];
+let tool = 'draw', color = COLORS[0], size = 5;
+let R = [1,0,0, 0,1,0, 0,0,1], zoom = 1;
+let W = 0, H = 0, cx = 0, cy = 0, rad = 1, dirty = true;
+
+/* ---- math ---- */
+const mul = (A,B) => { const C = new Array(9);
+  for (let i=0;i<3;i++) for (let j=0;j<3;j++) C[i*3+j] = A[i*3]*B[j] + A[i*3+1]*B[3+j] + A[i*3+2]*B[6+j];
+  return C; };
+const norm = v => { const l = Math.hypot(v[0],v[1],v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
+function ortho(M){ // Gram-Schmidt on rows to stop drift
+  let a = norm([M[0],M[1],M[2]]), b = [M[3],M[4],M[5]];
+  const d = a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  b = norm([b[0]-d*a[0], b[1]-d*a[1], b[2]-d*a[2]]);
+  const c = [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  return [...a, ...b, ...c];
+}
+function rotate(ay, ax){
+  const cyy = Math.cos(ay), sy = Math.sin(ay), cxx = Math.cos(ax), sx = Math.sin(ax);
+  const Ry = [cyy,0,sy, 0,1,0, -sy,0,cyy], Rx = [1,0,0, 0,cxx,-sx, 0,sx,cxx];
+  R = ortho(mul(Ry, mul(Rx, R))); dirty = true;
+}
+const toLocal = v => [R[0]*v[0]+R[3]*v[1]+R[6]*v[2], R[1]*v[0]+R[4]*v[1]+R[7]*v[2], R[2]*v[0]+R[5]*v[1]+R[8]*v[2]];
+
+function pick(e){ // screen -> point on sphere (local coords), or null if outside
+  const b = cv.getBoundingClientRect();
+  const x = (e.clientX - b.left - cx) / rad, y = -(e.clientY - b.top - cy) / rad;
+  const d = x*x + y*y;
+  return d > 1 ? null : toLocal([x, y, Math.sqrt(1 - d)]);
+}
+
+/* ---- strokes ---- */
+function pushHistory(){ history.push(strokes.slice()); if (history.length > 80) history.shift(); syncUndo(); }
+function syncUndo(){ $('undo').disabled = !history.length; }
+function save(){
+  try { localStorage.setItem(KEY, JSON.stringify(strokes.map(s => ({c:s.c, w:s.w, p:s.p.map(n => +n.toFixed(4))})))); } catch(e){}
+}
+function addPoint(s, p){
+  const n = s.p.length;
+  if (n){
+    const a = [s.p[n-3], s.p[n-2], s.p[n-1]];
+    const dot = Math.min(1, a[0]*p[0]+a[1]*p[1]+a[2]*p[2]), ang = Math.acos(dot);
+    if (ang < 0.004) return;
+    const steps = Math.ceil(ang / 0.04); // keep long jumps hugging the surface
+    for (let i=1;i<steps;i++){ const t = i/steps;
+      s.p.push(...norm([a[0]+(p[0]-a[0])*t, a[1]+(p[1]-a[1])*t, a[2]+(p[2]-a[2])*t])); }
+  }
+  s.p.push(p[0],p[1],p[2]);
+}
+function eraseAt(p){
+  const lim = Math.cos(Math.max(0.05, size/300*1.5));
+  const kept = strokes.filter(s => { for (let i=0;i<s.p.length;i+=3)
+    if (s.p[i]*p[0]+s.p[i+1]*p[1]+s.p[i+2]*p[2] > lim) return false; return true; });
+  if (kept.length !== strokes.length){ strokes = kept; dirty = true; return true; }
+  return false;
+}
+function example(){
+  const out = [], sp = [];
+  for (let i=0;i<=400;i++){ const t=i/400, la=-1.15+2.3*t, lo=t*Math.PI*7;
+    sp.push(Math.cos(la)*Math.cos(lo), Math.sin(la), Math.cos(la)*Math.sin(lo)); }
+  out.push({c:'#e5484d', w:4/300, p:sp});
+  const ring = (a,t0,t1,c,w) => { const p=[]; for (let i=0;i<=60;i++){ const th=t0+(t1-t0)*i/60;
+    p.push(Math.sin(a)*Math.cos(th), Math.sin(a)*Math.sin(th), Math.cos(a)); } out.push({c,w:w/300,p}); };
+  ring(0.42, 0, Math.PI*2, '#1b2530', 5);
+  ring(0.24, Math.PI*1.15, Math.PI*1.85, '#1b2530', 5);
+  out.push({c:'#1b2530', w:12/300, p:norm([-0.15,0.13,1])});
+  out.push({c:'#1b2530', w:12/300, p:norm([0.15,0.13,1])});
+  return out;
+}
+
+/* ---- render ---- */
+function resize(){
+  const b = cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  W = b.width; H = b.height; cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0); dirty = true;
+}
+function drawStrokes(front){
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const s of strokes){
+    const p = s.p, lw = Math.max(0.6, s.w * rad);
+    ctx.strokeStyle = ctx.fillStyle = s.c; ctx.lineWidth = lw;
+    if (p.length === 3){
+      const z = R[6]*p[0]+R[7]*p[1]+R[8]*p[2];
+      if ((z >= 0) === front){ ctx.beginPath();
+        ctx.arc(cx+(R[0]*p[0]+R[1]*p[1]+R[2]*p[2])*rad, cy-(R[3]*p[0]+R[4]*p[1]+R[5]*p[2])*rad, lw/2, 0, 7); ctx.fill(); }
+      continue;
+    }
+    ctx.beginPath(); let pen = false;
+    for (let i=0;i<p.length;i+=3){
+      const a=p[i], b=p[i+1], c=p[i+2], z = R[6]*a+R[7]*b+R[8]*c;
+      if ((z >= 0) !== front){ pen = false; continue; }
+      const x = cx+(R[0]*a+R[1]*b+R[2]*c)*rad, y = cy-(R[3]*a+R[4]*b+R[5]*c)*rad;
+      if (pen) ctx.lineTo(x,y); else { ctx.moveTo(x,y); ctx.lineTo(x,y); pen = true; }
+    }
+    ctx.stroke();
+  }
+}
+function drawGrid(col){
+  ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.beginPath();
+  const seg = (f) => { let pen=false; for (let i=0;i<=72;i++){ const q=f(i/72*Math.PI*2);
+    const z = R[6]*q[0]+R[7]*q[1]+R[8]*q[2]; if (z<0){pen=false;continue;}
+    const x=cx+(R[0]*q[0]+R[1]*q[1]+R[2]*q[2])*rad, y=cy-(R[3]*q[0]+R[4]*q[1]+R[5]*q[2])*rad;
+    pen ? ctx.lineTo(x,y) : ctx.moveTo(x,y); pen=true; } };
+  for (let k=-2;k<=2;k++){ const la=k*Math.PI/6, cl=Math.cos(la), sl=Math.sin(la);
+    seg(t => [cl*Math.cos(t), sl, cl*Math.sin(t)]); }
+  for (let k=0;k<6;k++){ const lo=k*Math.PI/6, c=Math.cos(lo), s=Math.sin(lo);
+    seg(t => [Math.cos(t)*c, Math.sin(t), Math.cos(t)*s]); }
+  ctx.stroke();
+}
+function render(){
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+  cx = W/2; cy = H/2 - 8; rad = Math.max(20, Math.min(W, H) * 0.4 * zoom);
+  ctx.clearRect(0,0,W,H);
+  // ground shadow
+  ctx.save(); ctx.translate(cx, cy + rad*1.08); ctx.scale(1, 0.14);
+  let g = ctx.createRadialGradient(0,0,0,0,0,rad); g.addColorStop(0, v('--shadow')); g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,rad,0,7); ctx.fill(); ctx.restore();
+  // ball
+  g = ctx.createRadialGradient(cx-rad*.35, cy-rad*.4, rad*.05, cx, cy, rad);
+  g.addColorStop(0, v('--ball-hi')); g.addColorStop(1, v('--ball-lo'));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx,cy,rad,0,7); ctx.fill();
+  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,rad,0,7); ctx.clip();
+  if ($('opt-xray').checked){ ctx.globalAlpha = 0.16; drawStrokes(false); ctx.globalAlpha = 1; }
+  if ($('opt-grid').checked) drawGrid(v('--grid'));
+  drawStrokes(true);
+  // rim shading sits over the ink so it reads as on the surface
+  g = ctx.createRadialGradient(cx-rad*.2, cy-rad*.25, rad*.55, cx, cy, rad);
+  g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1, v('--rim'));
+  ctx.fillStyle = g; ctx.fillRect(cx-rad, cy-rad, rad*2, rad*2);
+  ctx.restore();
+}
+function frame(){
+  if ($('opt-spin').checked && !active){ rotate(0.006, 0); }
+  if (dirty){ dirty = false; render(); }
+  requestAnimationFrame(frame);
+}
+
+/* ---- pointer input ---- */
+const ptrs = new Map(); let active = null, cur = null, last = null, pinch = 0, erased = false;
+cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, e);
+  if (ptrs.size === 2){ // second finger: drop the stroke in progress, start pinch
+    if (cur){ strokes.pop(); history.pop(); cur = null; syncUndo(); dirty = true; }
+    const [a,b] = [...ptrs.values()]; pinch = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY); active = 'pinch'; return;
+  }
+  const p = pick(e); last = e;
+  if (e.button === 2 || e.shiftKey || tool === 'rotate' || !p){ active = 'rotate'; cv.style.cursor = 'grabbing'; return; }
+  if (tool === 'draw'){
+    pushHistory(); cur = {c: color, w: size/300, p: []}; addPoint(cur, p); strokes.push(cur); active = 'draw'; dirty = true;
+  } else { pushHistory(); erased = eraseAt(p); active = 'erase'; }
+  $('hint').hidden = true;
+});
+cv.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId, e);
+  if (active === 'pinch' && ptrs.size === 2){
+    const [a,b] = [...ptrs.values()], d = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
+    if (pinch) setZoom(zoom * d / pinch); pinch = d; return;
+  }
+  if (active === 'rotate'){ rotate((e.clientX-last.clientX)/rad, (e.clientY-last.clientY)/rad); last = e; return; }
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ev of (evs.length ? evs : [e])){
+    const p = pick(ev); if (!p) continue;
+    if (active === 'draw' && cur){ addPoint(cur, p); dirty = true; }
+    else if (active === 'erase'){ if (eraseAt(p)) erased = true; }
+  }
+});
+function up(e){
+  ptrs.delete(e.pointerId);
+  if (active === 'erase' && !erased){ history.pop(); syncUndo(); }
+  if (active === 'draw' || active === 'erase') save();
+  if (ptrs.size === 0){ active = null; cur = null; erased = false; cv.style.cursor = tool === 'rotate' ? 'grab' : 'crosshair'; }
+}
+cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+function setZoom(z){ zoom = Math.min(2.4, Math.max(0.4, z)); dirty = true; }
+cv.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * Math.exp(-e.deltaY * 0.0012)); }, {passive:false});
+
+/* ---- toolbar ---- */
+function setTool(t){ tool = t;
+  document.querySelectorAll('[data-tool]').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t));
+  cv.style.cursor = t === 'rotate' ? 'grab' : 'crosshair'; }
+document.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+const swBox = $('swatches'), custom = $('custom-color');
+function setColor(c, el){ color = c; swBox.querySelectorAll('.sw').forEach(s => s.setAttribute('aria-pressed', s === el)); if (tool !== 'draw') setTool('draw'); }
+COLORS.forEach((c,i) => { const b = document.createElement('button');
+  b.className = 'sw'; b.id = 'sw-'+i; b.style.background = c; b.setAttribute('aria-label', 'Ink '+c); b.setAttribute('aria-pressed', i===0);
+  b.addEventListener('click', () => setColor(c, b)); swBox.insertBefore(b, custom); });
+custom.addEventListener('input', () => setColor(custom.value, null));
+$('size').addEventListener('input', e => size = +e.target.value);
+function undo(){ if (!history.length) return; strokes = history.pop(); syncUndo(); save(); dirty = true; }
+$('undo').addEventListener('click', undo);
+$('clear').addEventListener('click', () => { if (!strokes.length) return; pushHistory(); strokes = []; save(); dirty = true; });
+['opt-grid','opt-xray','opt-spin'].forEach(id => $(id).addEventListener('change', () => dirty = true));
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z'){ e.preventDefault(); undo(); }
+  else if (e.key === 'd') setTool('draw'); else if (e.key === 'e') setTool('erase'); else if (e.key === 'r') setTool('rotate');
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => dirty = true);
+new MutationObserver(() => dirty = true).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
+
+/* ---- boot ---- */
+let stored = null;
+try { stored = JSON.parse(localStorage.getItem(KEY)); } catch(e){}
+strokes = Array.isArray(stored) ? stored.filter(s => s && Array.isArray(s.p)) : example();
+rotate(-0.35, 0.25); syncUndo();
+new ResizeObserver(resize).observe(cv); resize(); if (document.fonts) document.fonts.ready.then(() => dirty = true);
+requestAnimationFrame(frame);
+})();
+</script>
+
+</body></html>
